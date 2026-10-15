@@ -1,10 +1,10 @@
 # Sprinkle Trivia — native C build on top of the vendored CUI bundle.
 #
-#   make            fully static executable: build/sprinkle-trivia
-#                   (vendored SDL3/FreeType/HarfBuzz/mbedTLS, zero .so deps)
+#   make            development executable: build/sprinkle-trivia-dev
+#   make static     Linux static executable: build/sprinkle-trivia
 #   make dev        quick iteration build against system SDL3/FreeType/HarfBuzz
-#                   (still needs third_party mbedTLS; see make vendor-net)
-#   make vendor     download + build all third-party static libs
+#                   (automatically builds pinned third_party mbedTLS)
+#   make vendored   download + build all third-party static libs
 #
 # Code lives entirely in this directory (vendor/ and third_party/src included).
 .DEFAULT_GOAL := dev
@@ -13,7 +13,10 @@ AR ?= ar
 PKG_CONFIG ?= pkg-config
 CFLAGS ?= -O2 -g
 # Generic x86-64 baseline: no -march=native, no host tuning.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
 CFLAGS += -march=x86-64 -mtune=generic
+endif
 APP_SOURCES := main.c app.c game.c json.c net.c embedded_fonts.c
 TARGET_STATIC := build/sprinkle-trivia
 TARGET_DEV := build/sprinkle-trivia-dev
@@ -43,11 +46,17 @@ CPPFLAGS += -Ithird_party/install/harfbuzz/include
 endif
 
 # CUI bundle prerequisites (pkg-config is only needed for system dev libraries).
+ifneq ($(filter dev macos-app,$(or $(MAKECMDGOALS),dev)),)
 ifeq ($(shell $(PKG_CONFIG) --exists 'sdl3 >= 3.2' freetype2 harfbuzz && echo yes),)
 $(error For `make dev` install SDL3 >= 3.2, FreeType and HarfBuzz development packages)
 endif
+endif
 DEV_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl3 freetype2 harfbuzz)
 DEV_LDLIBS := $(shell $(PKG_CONFIG) --libs sdl3 freetype2 harfbuzz) -lm
+
+ifeq ($(UNAME_S),Darwin)
+DEV_LDLIBS += -lresolv
+endif
 
 include sources.mk
 PORTABLE_OBJECTS := $(PORTABLE_SOURCES:%.c=build/%.o)
@@ -76,7 +85,9 @@ $(TARGET_DEV): $(APP_OBJECTS) $(LIBRARIES) $(MBEDTLS_LIBS)
 # FreeType, HarfBuzz and mbedTLS. No .so dependencies remain in the binary.
 STATIC_LDLIBS := -lstdc++ -lm -lpthread -ldl -lrt
 # net.c: avoid getaddrinfo/NSS dlopen paths (safe in static binaries).
+ifeq ($(UNAME_S),Linux)
 CPPFLAGS += -DTRIVIA_STATIC
+endif
 $(TARGET_STATIC): $(APP_OBJECTS) $(LIBRARIES) $(SDL_STATIC_LIB) $(FREETYPE_STATIC_LIB) \
                   $(HARFBUZZ_STATIC_LIB) $(MBEDTLS_LIBS)
 	@mkdir -p $(dir $@)
@@ -110,22 +121,24 @@ build/%.o: %.S
 THIRD_PARTY := third_party
 vendored: $(SDL_STATIC_LIB) $(FREETYPE_STATIC_LIB) $(HARFBUZZ_STATIC_LIB) $(MBEDTLS_LIBS)
 
-$(MBEDTLS_LIBS): third_party/src/mbedtls-3.6.4
-	cmake -S third_party/src/mbedtls-3.6.4 -B third_party/build/mbedtls -G Ninja \
-	  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-O2 -march=x86-64" \
+$(word 2,$(MBEDTLS_LIBS)) $(word 3,$(MBEDTLS_LIBS)): $(firstword $(MBEDTLS_LIBS))
+
+$(firstword $(MBEDTLS_LIBS)): third_party/src/mbedtls-3.6.4
+	cmake -S third_party/src/mbedtls-3.6.4 -B third_party/build/mbedtls  \
+	  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-O2" \
 	  -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=OFF -DUSE_SHARED_MBEDTLS=OFF
 	cmake --build third_party/build/mbedtls
 
 third_party/src/mbedtls-3.6.4:
 	mkdir -p third_party/src
-	curl -sL -o third_party/mbedtls.tar.bz2 \
+	curl -fL -o third_party/mbedtls.tar.bz2 \
 	  https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.4/mbedtls-3.6.4.tar.bz2
 	tar -xjf third_party/mbedtls.tar.bz2 -C third_party/src
 	rm third_party/mbedtls.tar.bz2
 
 $(SDL_STATIC_LIB): third_party/src/sdl
-	cmake -S third_party/src/sdl -B third_party/build/sdl -G Ninja \
-	  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-O2 -march=x86-64" \
+	cmake -S third_party/src/sdl -B third_party/build/sdl  \
+	  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-O2" \
 	  -DCMAKE_INSTALL_PREFIX=third_party/install/sdl \
 	  -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF \
 	  -DSDL_EXAMPLES=OFF \
@@ -136,15 +149,15 @@ $(SDL_STATIC_LIB): third_party/src/sdl
 
 third_party/src/sdl:
 	mkdir -p third_party/src
-	curl -sL -o third_party/sdl.tar.gz \
+	curl -fL -o third_party/sdl.tar.gz \
 	  https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz
 	tar -xzf third_party/sdl.tar.gz -C third_party/src
 	rm third_party/sdl.tar.gz
 	mv third_party/src/SDL3-3.4.18 third_party/src/sdl
 
 $(FREETYPE_STATIC_LIB): third_party/src/freetype
-	cmake -S third_party/src/freetype -B third_party/build/freetype -G Ninja \
-	  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-O2 -march=x86-64" \
+	cmake -S third_party/src/freetype -B third_party/build/freetype  \
+	  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-O2" \
 	  -DCMAKE_INSTALL_PREFIX=third_party/install/freetype \
 	  -DBUILD_SHARED_LIBS=OFF \
 	  -DFT_DISABLE_ZLIB=TRUE -DFT_DISABLE_BZIP2=TRUE -DFT_DISABLE_PNG=TRUE \
@@ -154,7 +167,7 @@ $(FREETYPE_STATIC_LIB): third_party/src/freetype
 
 third_party/src/freetype:
 	mkdir -p third_party/src
-	curl -sL -o third_party/freetype.tar.xz \
+	curl -fL -o third_party/freetype.tar.xz \
 	  https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz
 	tar -xJf third_party/freetype.tar.xz -C third_party/src
 	rm third_party/freetype.tar.xz
@@ -163,9 +176,9 @@ third_party/src/freetype:
 $(HARFBUZZ_STATIC_LIB): third_party/src/harfbuzz $(FREETYPE_STATIC_LIB)
 	rm -rf third_party/build/harfbuzz third_party/install/harfbuzz
 	PKG_CONFIG_PATH="$(CURDIR)/third_party/install/freetype/lib/pkgconfig" \
-	  cmake -S third_party/src/harfbuzz -B third_party/build/harfbuzz -G Ninja \
-	  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-O2 -march=x86-64" \
-	  -DCMAKE_C_FLAGS="-O2 -march=x86-64" \
+	  cmake -S third_party/src/harfbuzz -B third_party/build/harfbuzz  \
+	  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-O2" \
+	  -DCMAKE_C_FLAGS="-O2" \
 	  -DCMAKE_INSTALL_PREFIX=third_party/install/harfbuzz \
 	  -DCMAKE_PREFIX_PATH="$(CURDIR)/third_party/install/freetype" \
 	  -DBUILD_SHARED_LIBS=OFF -DHB_BUILD_SHARED=OFF \
@@ -177,7 +190,7 @@ $(HARFBUZZ_STATIC_LIB): third_party/src/harfbuzz $(FREETYPE_STATIC_LIB)
 
 third_party/src/harfbuzz:
 	mkdir -p third_party/src
-	curl -sL -o third_party/harfbuzz.tar.xz \
+	curl -fL -o third_party/harfbuzz.tar.xz \
 	  https://github.com/harfbuzz/harfbuzz/releases/download/14.6.0/harfbuzz-14.6.0.tar.xz
 	tar -xJf third_party/harfbuzz.tar.xz -C third_party/src
 	rm third_party/harfbuzz.tar.xz
@@ -185,3 +198,14 @@ third_party/src/harfbuzz:
 
 .PHONY: all dev static check vendored
 -include $(OBJECTS:.o=.d) $(APP_OBJECTS:.o=.d)
+
+# Relocatable macOS app; copy dependency dylibs and sign after rewriting paths.
+macos-app: $(TARGET_DEV)
+	@test "$(UNAME_S)" = Darwin || (echo "macos-app requires macOS"; exit 1)
+	python3 scripts/macos_bundle.py $(TARGET_DEV) "build/Sprinkle Trivia.app"
+
+.PHONY: macos-app
+
+build/net.o: | third_party/src/mbedtls-3.6.4
+
+build/embedded_fonts_data.o: assets/fonts/Inter-Regular.otf assets/fonts/Inter-Bold.otf

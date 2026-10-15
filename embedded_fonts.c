@@ -3,6 +3,7 @@
 #include "embedded_fonts.h"
 
 #include <stdio.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -15,7 +16,15 @@ extern const unsigned char font_bold_data[];
 extern const unsigned char font_bold_end[];
 
 static char *embed_to_memfd(const char *name, const unsigned char *data, size_t length) {
+#ifdef __APPLE__
+    (void)name;
+    char temporary[] = "/tmp/cuivia-font-XXXXXX";
+    const int fd = mkstemp(temporary);
+    if (fd >= 0)
+        unlink(temporary);
+#else
     const int fd = memfd_create(name, 0);
+#endif
     if (fd < 0)
         return NULL;
     size_t offset = 0;
@@ -28,7 +37,13 @@ static char *embed_to_memfd(const char *name, const unsigned char *data, size_t 
         offset += (size_t)written;
     }
     char *path = malloc(64);
-    if (!path || snprintf(path, 64, "/proc/self/fd/%d", fd) < 0) {
+    if (!path || snprintf(path, 64,
+#ifdef __APPLE__
+                           "/dev/fd/%d", fd
+#else
+                           "/proc/self/fd/%d", fd
+#endif
+                           ) < 0) {
         close(fd);
         free(path);
         return NULL;

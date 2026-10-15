@@ -1,6 +1,6 @@
 /* Embedded font blobs: the Inter Regular/Bold OTF files are linked into the
- * executable via .incbin, then served to FreeType through memfd-backed
- * /proc/self/fd paths so no font files are needed on disk at runtime.
+ * executable via .incbin, then served to FreeType through descriptor paths
+ * (Linux memfds or unlinked temporary files on macOS) so no font files are needed on disk at runtime.
  * SPDX-License-Identifier: MIT */
 #ifndef TRIVIA_EMBEDDED_FONTS_H
 #define TRIVIA_EMBEDDED_FONTS_H
