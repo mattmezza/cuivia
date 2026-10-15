@@ -1,0 +1,11 @@
+# Build outputs
+build/
+
+# Vendored third-party sources and artifacts (make vendor re-downloads and
+# builds them: SDL3 3.4.18, FreeType 2.14.3, HarfBuzz 14.6.0, mbedTLS 3.6.4).
+# Sources are intentionally not committed; the Makefile fetches pinned releases.
+third_party/
+
+# Editor noise
+*.swp
+.DS_Store
